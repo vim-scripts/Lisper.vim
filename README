@@ -1,0 +1,25 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=3819
+
+This vim plugin provide lisp environments for vimmers.
+
+Source Repository.
+ref: http://github.com/mattn/lisper-vim
+
+LisperEvalBuffer: evaluate buffer as lisp.
+LisperRepl: start repl in vim command-line.
+
+You can call lisper#eval() to evaluate expression.
+
+  :echo lisper#eval('(+ 1 2 3 4 5)')
+  15
+
+Or, make instance permanently.
+
+  :let engine = lisper#engine()
+  :echo engine.eval("(+ 1 2 3 4 5)")
+  15
+  :echo engine.eval("(+ 1 (length (quote abc))")
+  4
+
+The instance of lisp machine have global environment for the variable.
+
