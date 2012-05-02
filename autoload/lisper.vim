@@ -1,7 +1,7 @@
 "=============================================================================
 " lisper.vim
 " Author: Yasuhiro Matsumoto <mattn.jp@gmail.com>
-" Last Change: 22-Nov-2011.
+" Last Change: 17-Apr-2012.
 "
 " Based On: http://norvig.com/lis.py
 
@@ -260,12 +260,15 @@ function! s:read_from(ctx)
       throw 'unexpected EOF while reading'
     endif
     let a:ctx.tokens = a:ctx.tokens[1:]
-    "if len(l) > 0 && len(a:ctx.tokens) > 0
-    "  let l += s:read_from(a:ctx)
-    "endif
     return l
   elseif ')' == token
     throw 'unexpected )'
+  elseif token =~ "^'"
+    if len(token) > 1
+      return s:atom(token[1:])
+    else
+      return ['quote'] + [s:read_from(a:ctx)]
+    endif
   else
     return s:atom(token)
   endif
@@ -338,35 +341,32 @@ function! s:lisp.dispose() dict
 endfunction
 
 function! s:lisp._eval(...) dict abort
-  let x = a:1
+  let X = a:1
   let env = a:0 > 1 ? a:2 : self.global_env
-  if type(x) == 4 " symbol
-    let s = s:deref(x)
+  if type(X) == 4 " symbol
+    let s = s:deref(X)
     if type(s) == 4
       return s
     endif
     return env.find(s)[s]
-  elseif type(x) != 3 " constant
-    return x
+  elseif type(X) != 3 " constant
+    return X
   else
-    if len(x) == 0
+    if len(X) == 0
       return
     endif
-    while type(x[0]) == 3 && len(x[0])
-      let t = x[0]
-      unlet x
-      let x = t
-      unlet t
-    endwhile
-    if len(x[0]) == 0
-      return 0
+    if type(X) == 3
+      let m = s:deref(X[0])
     endif
-    let m = s:deref(x[0])
+    if type(m) != 1
+      unlet m
+      let m = ''
+    endif
     if m == 'quote' " (quote exp)
-      let [_, exp; rest] = x
+      let [_, exp; rest] = X
       return exp
     elseif m == 'if' " (if test conseq alt)
-      let [_, test, conseq; rest] = x
+      let [_, test, conseq; rest] = X
       let alt = len(rest) > 0 ? rest[0] : 0
       if self._eval(test, env)
         return self._eval(conseq, env)
@@ -374,24 +374,24 @@ function! s:lisp._eval(...) dict abort
         return self._eval(alt, env)
       endif
     elseif m == 'set!' " (set! var exp)
-      let [_, var, exp; rest] = x
+      let [_, var, exp; rest] = X
       let m = s:deref(var)
       let vars = env.find(m, 1)
       let vars[m] = self._eval(exp, env)
       return m
     elseif m == 'define' " (define var exp)
-      let [_, var, exp; rest] = x
+      let [_, var, exp; rest] = X
       unlet m
       let m = s:deref(var)
       let env.bind[m] = self._eval(exp, env)
       return env.bind[m]
     elseif m == 'return' " (return exp)
       let env['_lisper_loop_'] = 0
-      return len(x) > 1 ? self._eval(x[1], env) : 0
+      return len(X) > 1 ? self._eval(X[1], env) : 0
     elseif m == 'loop' " (loop exp*)
       let oldloop = get(env, '_lisper_loop_', 0)
       while 1
-        for exp in x[1:]
+        for exp in X[1:]
           if exists("l:V")
             unlet V
           endif
@@ -405,17 +405,49 @@ function! s:lisp._eval(...) dict abort
         endfor
       endwhile
     elseif m == 'defun' " (defun func (var*) exp)
-      let [_, proc, vars; rest] = x
+      let [_, proc, vars; rest] = X
       unlet m
       let m = s:deref(proc)
-      let env.bind[m] = {'_lisper_symbol_': env.make_op('__[0]._eval(__[1], s:env.new(__[2], a:000, __[3]))', self, ["begin"]+rest, vars, env)}
+      let lvars = type(vars) == 3 ? vars : [vars]
+      let lvt = len(lvars) > 0 ? s:deref(lvars[0]) : ''
+      if len(lvars) == 2 && type(lvt) == 1 && lvt == '&rest'
+        let lvars = lvars[1:]
+        let env.bind[m] = {'_lisper_symbol_': env.make_op('__[0]._eval(__[1], s:env.new(__[2], [a:000], __[3]))', self, ["begin"]+rest, lvars, env)}
+      else
+        let env.bind[m] = {'_lisper_symbol_': env.make_op('__[0]._eval(__[1], s:env.new(__[2], a:000, __[3]))', self, ["begin"]+rest, lvars, env)}
+      endif
       return env.bind[m]
+    elseif m == 'let' " (let (var*) exp)
+      let [_, vars; rest] = X
+      let [lhs, rhs] = vars[0]
+      return call(env.make_op('__[0]._eval(__[1], s:env.new(__[2], a:000, __[3]))', self, ["begin"]+vars[1:]+rest, [lhs], env), [rhs])
     elseif m == 'lambda' " (lambda (var*) exp)
-      let [_, vars; rest] = x
-      return {'_lisper_symbol_': env.make_op('__[0]._eval(__[1], s:env.new(__[2], a:000, __[3]))', self, ["begin"]+rest, vars, env)}
+      let [_, vars; rest] = X
+      let lvars = type(vars) == 3 ? vars : [vars]
+      let lvt = len(lvars) > 0 ? s:deref(lvars[0]) : ''
+      if len(lvars) == 2 && type(lvt) == 1 && lvt == '&rest'
+        let lvars = lvars[1:]
+        return {'_lisper_symbol_': env.make_op('__[0]._eval(__[1], s:env.new(__[2], [a:000], __[3]))', self, ["begin"]+rest, lvars, env)}
+      else
+        return {'_lisper_symbol_': env.make_op('__[0]._eval(__[1], s:env.new(__[2], a:000, __[3]))', self, ["begin"]+rest, lvars, env)}
+      endif
+    elseif m == 'apply' " (apply exp exp*)
+      for exp in self._eval(X[2], env)
+        if exists("l:VV")
+          unlet VV
+        endif
+        let VV = self._eval(exp, env)
+        if !exists("l:V")
+          let V = VV
+        else
+          let V = call(self._eval(X[1]), [V, VV])
+        endif
+        unlet exp
+      endfor
+      return V
     elseif m == 'begin' " (begin exp*)
       let V = 0
-      for exp in x[1:]
+      for exp in X[1:]
         if exists("l:VV")
           unlet VV
         endif
@@ -429,17 +461,17 @@ function! s:lisp._eval(...) dict abort
       return V
     elseif m == 'display'
       let exps = []
-      for exp in x[1:]
+      for exp in X[1:]
         call add(exps, self._eval(exp, env))
         unlet exp
       endfor
       call call('s:echon', exps)
       return ''
     elseif m == 'newline'
-      return self._eval(["display", "\n"] + x[1:], env)
+      return self._eval(["display", "\n"] + X[1:], env)
     elseif m == 'vim-echo' || m == 'print'
       let exps = []
-      for exp in x[1:]
+      for exp in X[1:]
         call add(exps, self._eval(exp, env))
         unlet exp
       endfor
@@ -447,28 +479,28 @@ function! s:lisp._eval(...) dict abort
       return ''
     elseif m == 'vim-call'
       let exps = []
-      for exp in x[2:]
+      for exp in X[2:]
         call add(exps, self._eval(exp, env))
         unlet exp
       endfor
-      return call(s:deref(x[1]), exps)
+      return call(s:deref(X[1]), exps)
     elseif m == 'vim-eval'
       let exps = []
-      for exp in x[2:]
+      for exp in X[2:]
         call add(exps, self._eval(exp, env))
         unlet exp
       endfor
-      return call(env.make_op(s:deref(x[1])), exps)
+      return call(env.make_op(s:deref(X[1])), exps)
     elseif m == 'vim-do'
       let exps = []
-      for exp in x[2:]
+      for exp in X[2:]
         call add(exps, self._eval(exp, env))
         unlet exp
       endfor
-      return call(env.make_do(s:deref(x[1])), exps)
+      return call(env.make_do(s:deref(X[1])), exps)
     else " (proc exp*)
       let exps = []
-      for exp in x
+      for exp in X
         call add(exps, self._eval(exp, env))
         unlet exp
       endfor
@@ -519,8 +551,10 @@ function! lisper#repl()
   let nest = 0
   try
     while 1
-      let exp .= input("lisp".repeat(">", nest+1)." ")
-      echo "\n"
+      let prompt = "lisp".repeat(">", nest+1)." "
+      let inp = input(prompt)
+      let exp .= inp
+      echo "\r".prompt.inp."\n"
       if len(exp) > 0
         let tokens = []
         try
@@ -536,6 +570,8 @@ function! lisper#repl()
           else
             let nest = s:can(tokens)
           endif
+        finally
+          if exists('ret') | unlet ret | endif
         endtry
       endif
     endwhile
@@ -547,10 +583,14 @@ function! lisper#repl()
 endfunction
 
 function! lisper#bang(s)
-  let bang = index(readfile(a:s), "LisperBang")
-  if bang != -1
-    call lisper#eval(join(getline(bang+2, '$'), "\n"))
-  endif
+  try
+    let bang = index(readfile(a:s), "LisperBang")
+    if bang != -1
+      call lisper#eval(join(getline(bang+2, '$'), "\n"))
+    endif
+  catch
+    echohl WarningMsg | echo s:cut_vimprefix(v:exception) | echohl None
+  endtry
 endfunction
 
 " vim:set et:
